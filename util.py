@@ -1,13 +1,13 @@
 from __future__ import print_function
 import numpy as np
-import random
-from tqdm import tqdm
-import os
-import cPickle as cp
-#import _pickle as cp  # python3 compatability
 import networkx as nx
-import pdb
 import argparse
+# import random
+# from tqdm import tqdm
+# import os
+# import cPickle as cp
+# import _pickle as cp  # python3 compatability
+# import pdb
 
 cmd_opt = argparse.ArgumentParser(description='Argparser for graph_classification')
 cmd_opt.add_argument('-mode', default='cpu', help='cpu/gpu')
@@ -36,6 +36,7 @@ if len(cmd_args.latent_dim) == 1:
 
 print(cmd_args)
 
+
 class S2VGraph(object):
     def __init__(self, g, label, node_tags=None, node_features=None):
         '''
@@ -47,18 +48,18 @@ class S2VGraph(object):
         self.num_nodes = len(node_tags)
         self.node_tags = node_tags
         self.label = label
-        self.node_features = node_features  # numpy array (node_num * feature_dim)
+        self.node_features = node_features  # np array (node_num * feature_dim)
         self.degs = dict(g.degree).values()
 
         x, y = zip(*g.edges())
-        self.num_edges = len(x)        
+        self.num_edges = len(x)
         self.edge_pairs = np.ndarray(shape=(self.num_edges, 2), dtype=np.int32)
         self.edge_pairs[:, 0] = x
         self.edge_pairs[:, 1] = y
         self.edge_pairs = self.edge_pairs.flatten()
 
-def load_data():
 
+def load_data():
     print('loading data')
     g_list = []
     label_dict = {}
@@ -69,7 +70,7 @@ def load_data():
         for i in range(n_g):
             row = f.readline().strip().split()
             n, l = [int(w) for w in row]
-            if not l in label_dict:
+            if l not in label_dict:
                 mapped = len(label_dict)
                 label_dict[l] = mapped
             g = nx.Graph()
@@ -85,7 +86,8 @@ def load_data():
                     row = [int(w) for w in row]
                     attr = None
                 else:
-                    row, attr = [int(w) for w in row[:tmp]], np.array([float(w) for w in row[tmp:]])
+                    row = [int(w) for w in row[:tmp]]
+                    attr = np.array([float(w) for w in row[tmp:]])
                 if not row[0] in feat_dict:
                     mapped = len(feat_dict)
                     feat_dict[row[0]] = mapped
@@ -105,15 +107,21 @@ def load_data():
                 node_features = None
                 node_feature_flag = False
 
-            #assert len(g.edges()) * 2 == n_edges  (some graphs in COLLAB have self-loops, ignored here)
+            # (some graphs in COLLAB have self-loops, ignored here)
+            # assert len(g.edges()) * 2 == n_edges
             assert len(g) == n
-            g_list.append(S2VGraph(g, l, node_tags, node_features))
+            if len(g.edges()) > 0:
+                g_list.append(S2VGraph(g, l, node_tags, node_features))
+
     for g in g_list:
         g.label = label_dict[g.label]
+
     cmd_args.num_class = len(label_dict)
-    cmd_args.feat_dim = len(feat_dict) # maximum node label (tag)
-    if node_feature_flag == True:
-        cmd_args.attr_dim = node_features.shape[1] # dim of node features (attributes)
+    # maximum node label (tag)
+    cmd_args.feat_dim = len(feat_dict)
+    if node_feature_flag is True:
+        # dim of node features (attributes)
+        cmd_args.attr_dim = node_features.shape[1]
     else:
         cmd_args.attr_dim = 0
 
@@ -121,11 +129,14 @@ def load_data():
     print('# maximum node tag: %d' % cmd_args.feat_dim)
 
     if cmd_args.test_number == 0:
-        train_idxes = np.loadtxt('data/%s/10fold_idx/train_idx-%d.txt' % (cmd_args.data, cmd_args.fold), dtype=np.int32).tolist()
-        test_idxes = np.loadtxt('data/%s/10fold_idx/test_idx-%d.txt' % (cmd_args.data, cmd_args.fold), dtype=np.int32).tolist()
-        return [g_list[i] for i in train_idxes], [g_list[i] for i in test_idxes]
+        train_idxes = np.loadtxt('data/%s/10fold_idx/train_idx-%d.txt' %
+                                 (cmd_args.data, cmd_args.fold),
+                                 dtype=np.int32).tolist()
+        test_idxes = np.loadtxt('data/%s/10fold_idx/test_idx-%d.txt' %
+                                (cmd_args.data, cmd_args.fold),
+                                dtype=np.int32).tolist()
+        return [g_list[i] for i in train_idxes], \
+            [g_list[i] for i in test_idxes]
     else:
-        return g_list[: n_g - cmd_args.test_number], g_list[n_g - cmd_args.test_number :]
-
-
-
+        return g_list[: n_g - cmd_args.test_number], \
+            g_list[n_g - cmd_args.test_number:]
