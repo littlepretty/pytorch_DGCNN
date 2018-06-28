@@ -2,31 +2,46 @@ from __future__ import print_function
 import numpy as np
 import networkx as nx
 import argparse
-# import random
+import random
 # from tqdm import tqdm
 # import os
 # import cPickle as cp
 # import _pickle as cp  # python3 compatability
 # import pdb
 
-cmd_opt = argparse.ArgumentParser(description='Argparser for graph_classification')
+cmd_opt = argparse.ArgumentParser(
+    description='Argparser for graph_classification')
 cmd_opt.add_argument('-mode', default='cpu', help='cpu/gpu')
 cmd_opt.add_argument('-gm', default='mean_field', help='mean_field/loopy_bp')
 cmd_opt.add_argument('-data', default=None, help='data folder name')
-cmd_opt.add_argument('-batch_size', type=int, default=50, help='minibatch size')
+cmd_opt.add_argument(
+    '-batch_size', type=int, default=50, help='minibatch size')
 cmd_opt.add_argument('-seed', type=int, default=1, help='seed')
-cmd_opt.add_argument('-feat_dim', type=int, default=0, help='dimension of discrete node feature (maximum node tag)')
+cmd_opt.add_argument(
+    '-feat_dim', type=int, default=0,
+    help='dimension of discrete node feature (maximum node tag)')
 cmd_opt.add_argument('-num_class', type=int, default=0, help='#classes')
 cmd_opt.add_argument('-fold', type=int, default=1, help='fold (1..10)')
-cmd_opt.add_argument('-test_number', type=int, default=0, help='if specified, will overwrite -fold and use the last -test_number graphs as testing data')
-cmd_opt.add_argument('-num_epochs', type=int, default=1000, help='number of epochs')
-cmd_opt.add_argument('-latent_dim', type=str, default='64', help='dimension(s) of latent layers')
-cmd_opt.add_argument('-sortpooling_k', type=float, default=30, help='number of nodes kept after SortPooling')
-cmd_opt.add_argument('-out_dim', type=int, default=1024, help='s2v output size')
-cmd_opt.add_argument('-hidden', type=int, default=100, help='dimension of regression')
-cmd_opt.add_argument('-max_lv', type=int, default=4, help='max rounds of message passing')
-cmd_opt.add_argument('-learning_rate', type=float, default=0.0001, help='init learning_rate')
-cmd_opt.add_argument('-dropout', type=bool, default=False, help='whether add dropout after dense layer')
+cmd_opt.add_argument(
+    '-test_number', type=int, default=0,
+    help='if specified, will overwrite -fold and \
+    use the last -test_number graphs as testing data')
+cmd_opt.add_argument('-num_epochs', type=int, default=1000,
+                     help='number of epochs')
+cmd_opt.add_argument('-latent_dim', type=str, default='64',
+                     help='dimension(s) of latent layers')
+cmd_opt.add_argument('-sortpooling_k', type=float, default=30,
+                     help='number of nodes kept after SortPooling')
+cmd_opt.add_argument('-out_dim', type=int, default=1024,
+                     help='s2v output size')
+cmd_opt.add_argument('-hidden', type=int, default=100,
+                     help='dimension of regression')
+cmd_opt.add_argument('-max_lv', type=int, default=4,
+                     help='max rounds of message passing')
+cmd_opt.add_argument('-learning_rate', type=float, default=0.0001,
+                     help='init learning_rate')
+cmd_opt.add_argument('-dropout', type=bool, default=False,
+                     help='whether add dropout after dense layer')
 
 cmd_args, _ = cmd_opt.parse_known_args()
 
@@ -113,8 +128,11 @@ def load_data():
             if len(g.edges()) > 0:
                 g_list.append(S2VGraph(g, l, node_tags, node_features))
 
+    random.shuffle(g_list)
     for g in g_list:
         g.label = label_dict[g.label]
+
+    print('# graphs: %d' % len(g_list))
 
     cmd_args.num_class = len(label_dict)
     # maximum node label (tag)
@@ -138,5 +156,5 @@ def load_data():
         return [g_list[i] for i in train_idxes], \
             [g_list[i] for i in test_idxes]
     else:
-        return g_list[: n_g - cmd_args.test_number], \
-            g_list[n_g - cmd_args.test_number:]
+        return g_list[: len(g_list) - cmd_args.test_number], \
+            g_list[len(g_list) - cmd_args.test_number:]
