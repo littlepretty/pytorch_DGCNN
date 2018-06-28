@@ -61,6 +61,15 @@ IMDBMULTI)
   learning_rate=0.0001
   sortpooling_k=0.9
   ;;
+SMALLACFG)
+  bsize=20
+  num_epochs=800
+  learning_rate=0.0001
+  ;;
+ACFG)
+  num_epochs=400
+  learning_rate=0.0001
+  ;;
 *)
   num_epochs=500
   learning_rate=0.00001

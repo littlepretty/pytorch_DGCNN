@@ -15,6 +15,7 @@ from DGCNN_embedding import DGCNN
 from mlp_dropout import MLPClassifier
 from embedding import EmbedMeanField, EmbedLoopyBP
 from util import cmd_args, load_data
+from sklearn.metrics import confusion_matrix
 
 sys.path.append('%s/pytorch_structure2vec-master/s2v_lib' %
                 os.path.dirname(os.path.realpath(__file__)))
@@ -124,15 +125,20 @@ def loop_dataset(g_list, classifier, sample_idxes,
     pbar = tqdm(range(total_iters), unit='batch')
 
     n_samples = 0
+    all_pred = []
+    all_label = []
     for pos in pbar:
         selected_idx = sample_idxes[pos * bsize: (pos + 1) * bsize]
         batch_graph = [g_list[idx] for idx in selected_idx]
-        _, loss, acc = classifier(batch_graph)
+        _, loss, acc, pred = classifier(batch_graph)
 
         if optimizer is not None:
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+
+        all_pred.extend(pred.data.cpu().numpy().tolist())
+        all_label.extend([g.label for g in batch_graph])
 
         loss = loss.data.cpu().numpy()
         pbar.set_description('loss: %0.5f acc: %0.5f' % (loss, acc))
@@ -145,7 +151,13 @@ def loop_dataset(g_list, classifier, sample_idxes,
     total_loss = np.array(total_loss)
     avg_loss = np.sum(total_loss, 0) / n_samples
     print(n_samples)
-    return avg_loss, acc
+    return avg_loss, acc, all_pred, all_label
+
+
+def compute_confusion_matrix(pred, labels, prefix):
+    cm = confusion_matrix(labels, pred)
+    np.savetxt('%s_%s_confusion_matrix.txt' % (cmd_args.data, prefix), cm,
+               fmt='%4d', delimiter=' ')
 
 
 if __name__ == '__main__':
@@ -175,16 +187,21 @@ if __name__ == '__main__':
     for epoch in range(cmd_args.num_epochs):
         random.shuffle(train_idxes)
         classifier.train()
-        avg_loss, _ = loop_dataset(train_graphs, classifier,
-                                   train_idxes, optimizer=optimizer)
+        avg_loss, _, train_pred, train_labels = \
+            loop_dataset(train_graphs, classifier,
+                         train_idxes, optimizer=optimizer)
         print('\033[92maverage training of epoch %d: loss %.5f \
               acc %.5f\033[0m' % (epoch, avg_loss[0], avg_loss[1]))
 
         classifier.eval()
-        test_loss, test_acc = loop_dataset(test_graphs, classifier,
-                                           list(range(len(test_graphs))))
+        test_loss, test_acc, test_pred, test_labels = \
+            loop_dataset(test_graphs, classifier,
+                         list(range(len(test_graphs))))
         print('\033[93maverage test of epoch %d: loss %.5f \
               acc %.5f\033[0m' % (epoch, test_loss[0], test_loss[1]))
+        if epoch + 1 == cmd_args.num_epochs:
+            compute_confusion_matrix(train_pred, train_labels, 'train')
+            compute_confusion_matrix(test_pred, test_labels, 'test')
 
     with open('result.txt', 'a+') as f:
         f.write(str(test_acc) + '\n')
