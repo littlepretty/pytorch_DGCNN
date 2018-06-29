@@ -116,6 +116,10 @@ class Classifier(nn.Module):
 
         return self.mlp(embed, labels)
 
+    def embedding(self, graphs):
+        node_feat, _ = self.PrepareFeatureLabel(graphs)
+        return self.s2v(graphs, node_feat, None)
+
 
 def loop_dataset(g_list, classifier, sample_idxes,
                  optimizer=None, bsize=cmd_args.batch_size):
@@ -160,6 +164,13 @@ def compute_confusion_matrix(pred, labels, prefix):
                fmt='%4d', delimiter=' ')
 
 
+def store_embedding(classifier, graphs, prefix):
+    emb = classifier.embedding(graphs)
+    emb = emb.data.cpu().numpy()
+    np.savetxt('%s_%s_embedding.txt' % (cmd_args.data, prefix),
+               emb, fmt='%8.8f')
+
+
 if __name__ == '__main__':
     random.seed(cmd_args.seed)
     np.random.seed(cmd_args.seed)
@@ -202,6 +213,8 @@ if __name__ == '__main__':
         if epoch + 1 == cmd_args.num_epochs:
             compute_confusion_matrix(train_pred, train_labels, 'train')
             compute_confusion_matrix(test_pred, test_labels, 'test')
+            store_embedding(classifier, train_graphs, 'train')
+            store_embedding(classifier, test_graphs, 'test')
 
     with open('result.txt', 'a+') as f:
         f.write(str(test_acc) + '\n')
