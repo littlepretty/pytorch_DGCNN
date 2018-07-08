@@ -67,7 +67,8 @@ SMALLACFG)
   learning_rate=0.0001
   ;;
 ACFG)
-  num_epochs=400
+  bsize=40
+  num_epochs=800
   learning_rate=0.0001
   ;;
 *)

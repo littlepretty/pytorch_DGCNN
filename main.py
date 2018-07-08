@@ -167,8 +167,11 @@ def compute_confusion_matrix(pred, labels, prefix):
 def store_embedding(classifier, graphs, prefix):
     emb = classifier.embedding(graphs)
     emb = emb.data.cpu().numpy()
+    labels = [g.label for g in graphs]
     np.savetxt('%s_%s_embedding.txt' % (cmd_args.data, prefix),
                emb, fmt='%8.8f')
+    np.savetxt('%s_%s_embedding_label.txt' % (cmd_args.data, prefix),
+               labels, fmt='%d')
 
 
 if __name__ == '__main__':
