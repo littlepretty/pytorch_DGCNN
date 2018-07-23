@@ -3,6 +3,7 @@ import os
 import torch
 import random
 import numpy as np
+import pandas as pd
 from tqdm import tqdm
 import torch.optim as optim
 import math
@@ -16,9 +17,13 @@ from mlp_dropout import MLPClassifier
 from embedding import EmbedMeanField, EmbedLoopyBP
 from util import cmd_args, load_data
 from sklearn.metrics import confusion_matrix
+from sklearn.metrics import precision_score
+from sklearn.metrics import recall_score
 
 sys.path.append('%s/pytorch_structure2vec-master/s2v_lib' %
                 os.path.dirname(os.path.realpath(__file__)))
+
+os.environ['CUDA_VISIBLE_DEVICES'] = "0, 1, 2"
 
 
 class Classifier(nn.Module):
@@ -47,6 +52,7 @@ class Classifier(nn.Module):
                              num_node_feats=cmd_args.feat_dim,
                              num_edge_feats=0,
                              max_lv=cmd_args.max_lv)
+
         out_dim = cmd_args.out_dim
         if out_dim == 0:
             if cmd_args.gm == 'DGCNN':
@@ -121,18 +127,37 @@ class Classifier(nn.Module):
         return self.s2v(graphs, node_feat, None)
 
 
+def fair_sample_prob(indices, labels):
+    """
+    sample_prob[ith elem] is proportional to 1 / prob[ith elem's label]
+    """
+    hist, _ = np.histogram(labels, bins=np.arange(max(labels) + 2),
+                           density=False)
+    dist, _ = np.histogram(labels, bins=np.arange(max(labels) + 2),
+                           density=True)
+    sample_prob = [1 / x for x in dist]
+    sample_prob = [x / sum(sample_prob) for x in sample_prob]  # normalize
+    ret = [sample_prob[x] / hist[x] for x in labels]
+
+    return ret
+
+
 def loop_dataset(g_list, classifier, sample_idxes,
                  optimizer=None, bsize=cmd_args.batch_size):
-    total_loss = []
+    total_score = []
     total_iters = (len(sample_idxes) +
                    (bsize - 1) * (optimizer is None)) // bsize
     pbar = tqdm(range(total_iters), unit='batch')
+
+    graph_lables = [g.label for g in g_list]
+    fair_prob = fair_sample_prob(sample_idxes, graph_lables)
 
     n_samples = 0
     all_pred = []
     all_label = []
     for pos in pbar:
-        selected_idx = sample_idxes[pos * bsize: (pos + 1) * bsize]
+        # selected_idx = sample_idxes[pos * bsize: (pos + 1) * bsize]
+        selected_idx = np.random.choice(sample_idxes, size=bsize, p=fair_prob)
         batch_graph = [g_list[idx] for idx in selected_idx]
         _, loss, acc, pred = classifier(batch_graph)
 
@@ -146,16 +171,24 @@ def loop_dataset(g_list, classifier, sample_idxes,
 
         loss = loss.data.cpu().numpy()
         pbar.set_description('loss: %0.5f acc: %0.5f' % (loss, acc))
-        total_loss.append(np.array([loss, acc]) * len(selected_idx))
+        total_score.append(np.array([loss, acc]))
         n_samples += len(selected_idx)
 
     if optimizer is None:
         assert n_samples == len(sample_idxes)
 
-    total_loss = np.array(total_loss)
-    avg_loss = np.sum(total_loss, 0) / n_samples
-    print(n_samples)
-    return avg_loss, acc, all_pred, all_label
+    total_score = np.array(total_score)
+    avg_score = np.mean(np.array(total_score), 0)
+    return avg_score, all_pred, all_label
+
+
+def compute_pr_scores(pred, labels, prefix):
+    scores = {}
+    scores['precisions'] = precision_score(labels, pred, average=None)
+    scores['recalls'] = recall_score(labels, pred, average=None)
+    df = pd.DataFrame.from_dict(scores)
+    df.to_csv('%s_%s_pr_scores.txt' % (cmd_args.data, prefix),
+              float_format='%.4f')
 
 
 def compute_confusion_matrix(pred, labels, prefix):
@@ -164,7 +197,11 @@ def compute_confusion_matrix(pred, labels, prefix):
                fmt='%4d', delimiter=' ')
 
 
-def store_embedding(classifier, graphs, prefix):
+def store_embedding(classifier, graphs, prefix, sample_size=100):
+    if len(graphs) > sample_size:
+        sample_idx = np.random.randint(0, len(graphs), sample_size)
+        graphs = [graphs[i] for i in sample_idx]
+
     emb = classifier.embedding(graphs)
     emb = emb.data.cpu().numpy()
     labels = [g.label for g in graphs]
@@ -193,31 +230,46 @@ if __name__ == '__main__':
     classifier = Classifier()
     if cmd_args.mode == 'gpu':
         classifier = classifier.cuda()
+        # classifier = nn.DataParallel(classifier)
 
     optimizer = optim.Adam(classifier.parameters(), lr=cmd_args.learning_rate)
 
     train_idxes = list(range(len(train_graphs)))
     best_loss = None
+    train_loss_hist = []
+    train_accu_hist = []
+    test_loss_hist = []
+    test_accu_hist = []
     for epoch in range(cmd_args.num_epochs):
         random.shuffle(train_idxes)
         classifier.train()
-        avg_loss, _, train_pred, train_labels = \
+        avg_score, train_pred, train_labels = \
             loop_dataset(train_graphs, classifier,
                          train_idxes, optimizer=optimizer)
         print('\033[92maverage training of epoch %d: loss %.5f \
-              acc %.5f\033[0m' % (epoch, avg_loss[0], avg_loss[1]))
+              acc %.5f\033[0m' % (epoch, avg_score[0], avg_score[1]))
+        train_loss_hist.append(avg_score[0])
+        train_accu_hist.append(avg_score[1])
 
         classifier.eval()
-        test_loss, test_acc, test_pred, test_labels = \
+        test_score, test_pred, test_labels = \
             loop_dataset(test_graphs, classifier,
                          list(range(len(test_graphs))))
         print('\033[93maverage test of epoch %d: loss %.5f \
-              acc %.5f\033[0m' % (epoch, test_loss[0], test_loss[1]))
+              acc %.5f\033[0m' % (epoch, test_score[0], test_score[1]))
+        test_loss_hist.append(test_score[0])
+        test_accu_hist.append(test_score[1])
         if epoch + 1 == cmd_args.num_epochs:
+            compute_pr_scores(test_pred, test_labels, 'test')
             compute_confusion_matrix(train_pred, train_labels, 'train')
             compute_confusion_matrix(test_pred, test_labels, 'test')
             store_embedding(classifier, train_graphs, 'train')
             store_embedding(classifier, test_graphs, 'test')
 
-    with open('result.txt', 'a+') as f:
-        f.write(str(test_acc) + '\n')
+    hist = {}
+    hist['train_loss'] = train_loss_hist
+    hist['train_accu'] = train_accu_hist
+    hist['test_loss'] = test_loss_hist
+    hist['test_accu'] = test_accu_hist
+    df = pd.DataFrame.from_dict(hist)
+    df.to_csv('%s_hist.txt' % cmd_args.data, float_format='%.6f')

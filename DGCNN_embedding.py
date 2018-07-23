@@ -6,11 +6,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-# from torch.nn.parameter import Parameter
-# import numpy as np
-# import random
-# import torch.optim as optim
-# from tqdm import tqdm
 
 sys.path.append('%s/pytorch_structure2vec-master/s2v_lib' %
                 os.path.dirname(os.path.realpath(__file__)))
