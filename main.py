@@ -149,17 +149,17 @@ def loop_dataset(g_list, classifier, sample_idxes,
                    (bsize - 1) * (optimizer is None)) // bsize
     pbar = tqdm(range(total_iters), unit='batch')
 
-    graph_lables = [g.label for g in g_list]
-    fair_prob = fair_sample_prob(sample_idxes, graph_lables)
+    # graph_labels = [g.label for g in g_list]
+    # fair_prob = fair_sample_prob(sample_idxes, graph_labels)
 
     n_samples = 0
     all_pred = []
     all_label = []
     for pos in pbar:
-        # selected_idx = sample_idxes[pos * bsize: (pos + 1) * bsize]
-        selected_idx = np.random.choice(sample_idxes, size=bsize, p=fair_prob)
+        selected_idx = sample_idxes[pos * bsize: (pos + 1) * bsize]
+        # selected_idx = np.random.choice(sample_idxes, bsize, fair_prob)
         batch_graph = [g_list[idx] for idx in selected_idx]
-        _, loss, acc, pred = classifier(batch_graph)
+        _, loss, acc, precision, recall, pred = classifier(batch_graph)
 
         if optimizer is not None:
             optimizer.zero_grad()
@@ -168,10 +168,11 @@ def loop_dataset(g_list, classifier, sample_idxes,
 
         all_pred.extend(pred.data.cpu().numpy().tolist())
         all_label.extend([g.label for g in batch_graph])
-
+        avg_precision = np.nanmean(precision.data.cpu().numpy())
+        avg_recall = np.nanmean(recall.data.cpu().numpy())
         loss = loss.data.cpu().numpy()
         pbar.set_description('loss: %0.5f acc: %0.5f' % (loss, acc))
-        total_score.append(np.array([loss, acc]))
+        total_score.append(np.array([loss, acc, avg_precision, avg_recall]))
         n_samples += len(selected_idx)
 
     if optimizer is None:
@@ -246,8 +247,8 @@ if __name__ == '__main__':
         avg_score, train_pred, train_labels = \
             loop_dataset(train_graphs, classifier,
                          train_idxes, optimizer=optimizer)
-        print('\033[92maverage training of epoch %d: loss %.5f \
-              acc %.5f\033[0m' % (epoch, avg_score[0], avg_score[1]))
+        print('\033[92maverage training of epoch %d: loss %.5f acc %.5f precision %.5f recall %.5f\033[0m' %
+              (epoch, avg_score[0], avg_score[1], avg_score[2], avg_score[3]))
         train_loss_hist.append(avg_score[0])
         train_accu_hist.append(avg_score[1])
 
@@ -255,8 +256,9 @@ if __name__ == '__main__':
         test_score, test_pred, test_labels = \
             loop_dataset(test_graphs, classifier,
                          list(range(len(test_graphs))))
-        print('\033[93maverage test of epoch %d: loss %.5f \
-              acc %.5f\033[0m' % (epoch, test_score[0], test_score[1]))
+        print('\033[93maverage testing of epoch %d:  loss %.5f acc %.5f precision %.5f recall %.5f\033[0m' %
+              (epoch, test_score[0], test_score[1],
+               test_score[2], test_score[3]))
         test_loss_hist.append(test_score[0])
         test_accu_hist.append(test_score[1])
         if epoch + 1 == cmd_args.num_epochs:

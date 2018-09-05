@@ -63,12 +63,12 @@ IMDBMULTI)
   ;;
 SMALLACFG)
   bsize=20
-  num_epochs=100
+  num_epochs=400
   learning_rate=0.0001
   ;;
 ACFG_3C)
-  bsize=40
-  num_epochs=800
+  bsize=10
+  num_epochs=400
   learning_rate=0.0001
   ;;
 ACFG)

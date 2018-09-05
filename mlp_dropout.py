@@ -2,11 +2,11 @@ from __future__ import print_function
 
 import os
 import sys
+import torch
 from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
 # import numpy as np
-# import torch
 # import random
 # from torch.nn.parameter import Parameter
 # import torch.optim as optim
@@ -16,6 +16,11 @@ import torch.nn.functional as F
 sys.path.append('%s/pytorch_structure2vec-master/s2v_lib'
                 % os.path.dirname(os.path.realpath(__file__)))
 from pytorch_util import weights_init
+
+
+def to_onehot(indices, num_classes):
+    onehot = torch.zeros(indices.size(0), num_classes, device=indices.device)
+    return onehot.scatter_(1, indices.unsqueeze(1), 1)
 
 
 class MLPRegression(nn.Module):
@@ -64,10 +69,17 @@ class MLPClassifier(nn.Module):
         if y is not None:
             y = Variable(y)
             loss = F.nll_loss(logits, y)
+            pred = logits.data.max(1)[1]
 
-            pred = logits.data.max(1, keepdim=True)[1]
-            acc = pred.eq(y.data.view_as(pred)).cpu().sum().item() \
-                / float(y.size()[0])
-            return logits, loss, acc, pred
+            num_classes = logits.size(1)
+            correct = pred.eq(y.data.view_as(pred))
+            all_pos = to_onehot(pred, num_classes).sum(dim=0)
+            true_pos = to_onehot(pred[correct], num_classes).sum(dim=0)
+            all_true = to_onehot(y, num_classes).sum(dim=0)
+
+            precision = true_pos / all_pos
+            recall = true_pos / all_true
+            accu = (correct.sum().item()) / float(correct.size(0))
+            return logits, loss, accu, precision, recall, pred
         else:
             return logits
