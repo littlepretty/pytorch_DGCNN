@@ -40,8 +40,10 @@ cmd_opt.add_argument('-max_lv', type=int, default=4,
                      help='max rounds of message passing')
 cmd_opt.add_argument('-learning_rate', type=float, default=0.0001,
                      help='init learning_rate')
-cmd_opt.add_argument('-dropout', type=bool, default=False,
+cmd_opt.add_argument('-dropout', type=str, default='False',
                      help='whether add dropout after dense layer')
+cmd_opt.add_argument('-use_cached_data', type=str, default='False',
+                     help='whether to use previously cached dataset')
 
 cmd_args, _ = cmd_opt.parse_known_args()
 
@@ -49,6 +51,8 @@ cmd_args.latent_dim = [int(x) for x in cmd_args.latent_dim.split('-')]
 if len(cmd_args.latent_dim) == 1:
     cmd_args.latent_dim = cmd_args.latent_dim[0]
 
+cmd_args.dropout = (cmd_args.dropout == "True")
+cmd_args.use_cached_data = (cmd_args.use_cached_data == "True")
 print(cmd_args)
 
 

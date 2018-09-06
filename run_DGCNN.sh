@@ -62,12 +62,13 @@ IMDBMULTI)
   sortpooling_k=0.9
   ;;
 SMALLACFG)
-  bsize=20
-  num_epochs=400
+  bsize=40
+  num_epochs=4
   learning_rate=0.0001
+  use_cached_data=False
   ;;
 ACFG_3C)
-  bsize=10
+  bsize=40
   num_epochs=400
   learning_rate=0.0001
   ;;
@@ -75,6 +76,12 @@ ACFG)
   bsize=40
   num_epochs=400
   learning_rate=0.0001
+  ;;
+AcfgBenignVsAll)
+  bsize=40
+  num_epochs=4
+  learning_rate=0.0001
+  use_cached_data=False
   ;;
 *)
   num_epochs=500
@@ -90,18 +97,19 @@ if [ ${fold} == 0 ]; then
   do
     CUDA_VISIBLE_DEVICES=${GPU} python main.py \
         -seed 1 \
-        -data $DATA \
-        -fold $i \
-        -learning_rate $learning_rate \
-        -num_epochs $num_epochs \
-        -hidden $n_hidden \
-        -latent_dim $CONV_SIZE \
-        -sortpooling_k $sortpooling_k \
-        -out_dim $FP_LEN \
-        -batch_size $bsize \
-        -gm $gm \
-        -mode $gpu_or_cpu \
-        -dropout $dropout
+        -data ${DATA} \
+        -fold ${i} \
+        -learning_rate ${learning_rate} \
+        -num_epochs ${num_epochs} \
+        -hidden ${n_hidden} \
+        -latent_dim ${CONV_SIZE} \
+        -sortpooling_k ${sortpooling_k} \
+        -out_dim ${FP_LEN} \
+        -batch_size ${bsize} \
+        -gm ${gm} \
+        -mode ${gpu_or_cpu} \
+        -dropout ${dropout} \
+        -use_cached_data ${use_cached_data}
   done
   stop=`date +%s`
   echo "End of cross-validation"
@@ -113,17 +121,18 @@ if [ ${fold} == 0 ]; then
 else
   CUDA_VISIBLE_DEVICES=${GPU} python main.py \
       -seed 1 \
-      -data $DATA \
-      -fold $fold \
-      -learning_rate $learning_rate \
-      -num_epochs $num_epochs \
-      -hidden $n_hidden \
-      -latent_dim $CONV_SIZE \
-      -sortpooling_k $sortpooling_k \
-      -out_dim $FP_LEN \
-      -batch_size $bsize \
+      -data ${DATA} \
+      -fold ${fold} \
+      -learning_rate ${learning_rate} \
+      -num_epochs ${num_epochs} \
+      -hidden ${n_hidden} \
+      -latent_dim ${CONV_SIZE} \
+      -sortpooling_k ${sortpooling_k} \
+      -out_dim ${FP_LEN} \
+      -batch_size ${bsize} \
       -gm $gm \
-      -mode $gpu_or_cpu \
-      -dropout $dropout \
+      -mode ${gpu_or_cpu} \
+      -dropout ${dropout} \
+      -use_cached_data ${use_cached_data} \
       -test_number ${test_number}
 fi

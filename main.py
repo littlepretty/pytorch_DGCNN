@@ -1,17 +1,18 @@
 import sys
 import os
 import torch
+import math
 import random
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
+import cPickle as cp
 import torch.optim as optim
-import math
 import torch.nn as nn
 # import pdb
 # import torch.nn.functional as F
 # from torch.autograd import Variable
 # from torch.nn.parameter import Parameter
+from tqdm import tqdm
 from DGCNN_embedding import DGCNN
 from mlp_dropout import MLPClassifier
 from embedding import EmbedMeanField, EmbedLoopyBP
@@ -42,8 +43,7 @@ class Classifier(nn.Module):
         if cmd_args.gm == 'DGCNN':
             self.s2v = model(latent_dim=cmd_args.latent_dim,
                              output_dim=cmd_args.out_dim,
-                             num_node_feats=cmd_args.feat_dim +
-                             cmd_args.attr_dim,
+                             num_node_feats=cmd_args.feat_dim+cmd_args.attr_dim,
                              num_edge_feats=0,
                              k=cmd_args.sortpooling_k)
         else:
@@ -212,13 +212,39 @@ def store_embedding(classifier, graphs, prefix, sample_size=100):
                labels, fmt='%d')
 
 
+def load_graphs_may_cache():
+    cached_filename = 'cached_graphs.pkl'
+    if cmd_args.use_cached_data == True:
+        cache_file = open(cached_filename, 'rb')
+        dataset = cp.load(cache_file)
+        cmd_args.num_class = dataset['num_class']
+        cmd_args.feat_dim = dataset['feat_dim']
+        cmd_args.attr_dim = dataset['attr_dim']
+        train_graphs = dataset['train_graphs']
+        test_graphs = dataset['test_graphs']
+        cache_file.close()
+    else:
+        train_graphs, test_graphs = load_data()
+        cache_file = open(cached_filename, 'wb')
+        dataset = {}
+        dataset['num_class'] = cmd_args.num_class
+        dataset['feat_dim'] = cmd_args.feat_dim
+        dataset['attr_dim'] = cmd_args.attr_dim
+        dataset['train_graphs'] = train_graphs
+        dataset['test_graphs'] = test_graphs
+        cp.dump(dataset, cache_file)
+        cache_file.close()
+
+    return train_graphs, test_graphs
+
+
 if __name__ == '__main__':
     random.seed(cmd_args.seed)
     np.random.seed(cmd_args.seed)
     torch.manual_seed(cmd_args.seed)
 
-    train_graphs, test_graphs = load_data()
-    print('# train: %d, # test: %d' % (len(train_graphs), len(test_graphs)))
+    train_graphs, test_graphs = load_graphs_may_cache()
+    print('#train: %d, #test: %d' % (len(train_graphs), len(test_graphs)))
 
     if cmd_args.sortpooling_k <= 1:
         num_nodes_list = sorted([g.num_nodes for g in train_graphs +
