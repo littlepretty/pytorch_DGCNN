@@ -3,6 +3,8 @@ import os
 import torch
 import math
 import random
+import time
+import glog as log
 import numpy as np
 import pandas as pd
 import cPickle as cp
@@ -37,7 +39,7 @@ class Classifier(nn.Module):
         elif cmd_args.gm == 'DGCNN':
             model = DGCNN
         else:
-            print('unknown gm %s' % cmd_args.gm)
+            log.fatal('unknown gm %s' % cmd_args.gm)
             sys.exit()
 
         if cmd_args.gm == 'DGCNN':
@@ -168,11 +170,11 @@ def loop_dataset(g_list, classifier, sample_idxes,
 
         all_pred.extend(pred.data.cpu().numpy().tolist())
         all_label.extend([g.label for g in batch_graph])
-        avg_precision = np.nanmean(precision.data.cpu().numpy())
-        avg_recall = np.nanmean(recall.data.cpu().numpy())
+        pos_precision = precision.data.cpu().numpy()[1]
+        pos_recall = recall.data.cpu().numpy()[1]
         loss = loss.data.cpu().numpy()
         pbar.set_description('loss: %0.5f acc: %0.5f' % (loss, acc))
-        total_score.append(np.array([loss, acc, avg_precision, avg_recall]))
+        total_score.append(np.array([loss, acc, pos_precision, pos_recall]))
         n_samples += len(selected_idx)
 
     if optimizer is None:
@@ -187,6 +189,8 @@ def compute_pr_scores(pred, labels, prefix):
     scores = {}
     scores['precisions'] = precision_score(labels, pred, average=None)
     scores['recalls'] = recall_score(labels, pred, average=None)
+    log.info('%s precision: %s recall: %s' %
+             (prefix, scores['precisions'], scores['recalls']))
     df = pd.DataFrame.from_dict(scores)
     df.to_csv('%s_%s_pr_scores.txt' % (cmd_args.data, prefix),
               float_format='%.4f')
@@ -214,7 +218,8 @@ def store_embedding(classifier, graphs, prefix, sample_size=100):
 
 def load_graphs_may_cache():
     cached_filename = 'cached_graphs.pkl'
-    if cmd_args.use_cached_data == True:
+    if cmd_args.use_cached_data:
+        log.info("Loading cached dataset from %s" % cached_filename)
         cache_file = open(cached_filename, 'rb')
         dataset = cp.load(cache_file)
         cmd_args.num_class = dataset['num_class']
@@ -225,6 +230,7 @@ def load_graphs_may_cache():
         cache_file.close()
     else:
         train_graphs, test_graphs = load_data()
+        log.info("Dumping cached dataset from %s" % cached_filename)
         cache_file = open(cached_filename, 'wb')
         dataset = {}
         dataset['num_class'] = cmd_args.num_class
@@ -238,13 +244,35 @@ def load_graphs_may_cache():
     return train_graphs, test_graphs
 
 
+def balanced_sampling(graphs):
+    graph_labels = np.array([g.label for g in graphs])
+    pos_indices = np.where(graph_labels == 1)[0]
+    neg_indices = np.where(graph_labels == 0)[0]
+    log.info('#pos = %s, #neg = %s' % (pos_indices.size, neg_indices.size))
+
+    upper_bound = min(pos_indices.size * 3, neg_indices.size)
+    sampled_pos = [graphs[i] for i in pos_indices]
+    sampled_neg = [graphs[i] for i in
+                   np.random.choice(neg_indices, upper_bound, replace=False)]
+    sampled = sampled_pos + sampled_neg
+
+    np.random.shuffle(sampled)
+    log.info("#Balance sampled graphs = %d" % len(sampled))
+    return sampled
+
+
 if __name__ == '__main__':
     random.seed(cmd_args.seed)
     np.random.seed(cmd_args.seed)
     torch.manual_seed(cmd_args.seed)
+    log.setLevel("INFO")
+    start_time = time.time()
 
     train_graphs, test_graphs = load_graphs_may_cache()
-    print('#train: %d, #test: %d' % (len(train_graphs), len(test_graphs)))
+    train_graphs = balanced_sampling(train_graphs)
+    test_graphs = balanced_sampling(test_graphs)
+
+    log.info('#train: %d, #test: %d' % (len(train_graphs), len(test_graphs)))
 
     if cmd_args.sortpooling_k <= 1:
         num_nodes_list = sorted([g.num_nodes for g in train_graphs +
@@ -252,7 +280,7 @@ if __name__ == '__main__':
         cmd_args.sortpooling_k = num_nodes_list[
             int(math.ceil(cmd_args.sortpooling_k * len(num_nodes_list))) - 1
         ]
-        print('k used in SortPooling is: ' + str(cmd_args.sortpooling_k))
+        log.info('k used in SortPooling is: ' + str(cmd_args.sortpooling_k))
 
     classifier = Classifier()
     if cmd_args.mode == 'gpu':
@@ -273,7 +301,7 @@ if __name__ == '__main__':
         avg_score, train_pred, train_labels = \
             loop_dataset(train_graphs, classifier,
                          train_idxes, optimizer=optimizer)
-        print('\033[92maverage training of epoch %d: loss %.5f acc %.5f precision %.5f recall %.5f\033[0m' %
+        print('\033[92mTraining epoch %d: l %.5f a %.5f p %.5f r %.5f\033[0m' %
               (epoch, avg_score[0], avg_score[1], avg_score[2], avg_score[3]))
         train_loss_hist.append(avg_score[0])
         train_accu_hist.append(avg_score[1])
@@ -282,18 +310,19 @@ if __name__ == '__main__':
         test_score, test_pred, test_labels = \
             loop_dataset(test_graphs, classifier,
                          list(range(len(test_graphs))))
-        print('\033[93maverage testing of epoch %d:  loss %.5f acc %.5f precision %.5f recall %.5f\033[0m' %
-              (epoch, test_score[0], test_score[1],
-               test_score[2], test_score[3]))
+        print('\033[93mTest epoch %d: l %.5f a %.5f p %.5f r %.5f\033[0m' %
+              (epoch, test_score[0], test_score[1], test_score[2], test_score[3]))
         test_loss_hist.append(test_score[0])
         test_accu_hist.append(test_score[1])
         if epoch + 1 == cmd_args.num_epochs:
             compute_pr_scores(test_pred, test_labels, 'test')
             compute_confusion_matrix(train_pred, train_labels, 'train')
             compute_confusion_matrix(test_pred, test_labels, 'test')
-            store_embedding(classifier, train_graphs, 'train')
-            store_embedding(classifier, test_graphs, 'test')
+            # store_embedding(classifier, train_graphs, 'train')
+            # store_embedding(classifier, test_graphs, 'test')
 
+    duration = time.time() - start_time
+    log.info('Single training running time = %.2fs' % duration)
     hist = {}
     hist['train_loss'] = train_loss_hist
     hist['train_accu'] = train_accu_hist

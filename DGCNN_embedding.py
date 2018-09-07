@@ -2,6 +2,7 @@ from __future__ import print_function
 
 import os
 import sys
+import glog as log
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -17,7 +18,7 @@ class DGCNN(nn.Module):
     def __init__(self, output_dim, num_node_feats, num_edge_feats,
                  latent_dim=[32, 32, 32, 1], k=30,
                  conv1d_channels=[16, 32], conv1d_kws=[0, 5]):
-        print('Initializing DGCNN')
+        log.info('Initializing DGCNN')
         super(DGCNN, self).__init__()
         self.latent_dim = latent_dim
         self.output_dim = output_dim

@@ -1,8 +1,11 @@
 from __future__ import print_function
-import numpy as np
-import networkx as nx
+
 import argparse
 import random
+import numpy as np
+import glog as log
+import networkx as nx
+
 # from tqdm import tqdm
 # import os
 # import cPickle as cp
@@ -79,7 +82,7 @@ class S2VGraph(object):
 
 
 def load_data():
-    print('loading data')
+    log.info('Loading data as graphs')
     g_list = []
     label_dict = {}
     feat_dict = {}
@@ -136,7 +139,7 @@ def load_data():
     for g in g_list:
         g.label = label_dict[g.label]
 
-    print('# graphs: %d' % len(g_list))
+    log.info('# graphs: %d' % len(g_list))
 
     cmd_args.num_class = len(label_dict)
     # maximum node label (tag)
@@ -147,8 +150,8 @@ def load_data():
     else:
         cmd_args.attr_dim = 0
 
-    print('# classes: %d' % cmd_args.num_class)
-    print('# maximum node tag: %d' % cmd_args.feat_dim)
+    log.info('# classes: %d' % cmd_args.num_class)
+    log.info('# maximum node tag: %d' % cmd_args.feat_dim)
 
     if cmd_args.test_number == 0:
         train_idxes = np.loadtxt('data/%s/10fold_idx/train_idx-%d.txt' %

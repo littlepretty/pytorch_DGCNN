@@ -78,9 +78,9 @@ ACFG)
   learning_rate=0.0001
   ;;
 AcfgBenignVsAll)
-  bsize=40
-  num_epochs=4
-  learning_rate=0.0001
+  bsize=20
+  num_epochs=40
+  learning_rate=0.00001
   use_cached_data=False
   ;;
 *)
@@ -135,4 +135,8 @@ else
       -dropout ${dropout} \
       -use_cached_data ${use_cached_data} \
       -test_number ${test_number}
+  echo "Train confusion matrix:"
+  cat ${DATA}_train_confusion_matrix.txt
+  echo "Train confusion matrix:"
+  cat ${DATA}_test_confusion_matrix.txt
 fi
