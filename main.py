@@ -7,26 +7,19 @@ import time
 import glog as log
 import numpy as np
 import pandas as pd
-import cPickle as cp
 import torch.optim as optim
 import torch.nn as nn
-# import pdb
-# import torch.nn.functional as F
-# from torch.autograd import Variable
-# from torch.nn.parameter import Parameter
 from tqdm import tqdm
 from DGCNN_embedding import DGCNN
-from mlp_dropout import MLPClassifier
+from mlp_dropout import MLPClassifier, MaxRecallAtPrecision
 from embedding import EmbedMeanField, EmbedLoopyBP
-from util import cmd_args, load_data
-from sklearn.metrics import confusion_matrix
-from sklearn.metrics import precision_score
-from sklearn.metrics import recall_score
+from util import cmd_args, store_confusion_matrix
+from util import compute_pr_scores
+from util import balanced_sampling, load_graphs_may_cache
+
 
 sys.path.append('%s/pytorch_structure2vec-master/s2v_lib' %
                 os.path.dirname(os.path.realpath(__file__)))
-
-os.environ['CUDA_VISIBLE_DEVICES'] = "0, 1, 2"
 
 
 class Classifier(nn.Module):
@@ -45,7 +38,8 @@ class Classifier(nn.Module):
         if cmd_args.gm == 'DGCNN':
             self.s2v = model(latent_dim=cmd_args.latent_dim,
                              output_dim=cmd_args.out_dim,
-                             num_node_feats=cmd_args.feat_dim+cmd_args.attr_dim,
+                             num_node_feats=(cmd_args.feat_dim +
+                                             cmd_args.attr_dim),
                              num_edge_feats=0,
                              k=cmd_args.sortpooling_k)
         else:
@@ -61,10 +55,16 @@ class Classifier(nn.Module):
                 out_dim = self.s2v.dense_dim
             else:
                 out_dim = cmd_args.latent_dim
-        self.mlp = MLPClassifier(input_size=out_dim,
-                                 hidden_size=cmd_args.hidden,
-                                 num_class=cmd_args.num_class,
-                                 with_dropout=cmd_args.dropout)
+        if False:
+            self.mlp = MLPClassifier(input_size=out_dim,
+                                     hidden_size=cmd_args.hidden,
+                                     num_class=cmd_args.num_class,
+                                     with_dropout=cmd_args.dropout)
+
+        self.mlp = MaxRecallAtPrecision(input_size=out_dim,
+                                        hidden_size=cmd_args.hidden,
+                                        alpha=0.6,
+                                        with_dropout=cmd_args.dropout)
 
     def PrepareFeatureLabel(self, batch_graph):
         labels = torch.LongTensor(len(batch_graph))
@@ -121,7 +121,6 @@ class Classifier(nn.Module):
     def forward(self, batch_graph):
         node_feat, labels = self.PrepareFeatureLabel(batch_graph)
         embed = self.s2v(batch_graph, node_feat, None)
-
         return self.mlp(embed, labels)
 
     def embedding(self, graphs):
@@ -129,136 +128,56 @@ class Classifier(nn.Module):
         return self.s2v(graphs, node_feat, None)
 
 
-def fair_sample_prob(indices, labels):
-    """
-    sample_prob[ith elem] is proportional to 1 / prob[ith elem's label]
-    """
-    hist, _ = np.histogram(labels, bins=np.arange(max(labels) + 2),
-                           density=False)
-    dist, _ = np.histogram(labels, bins=np.arange(max(labels) + 2),
-                           density=True)
-    sample_prob = [1 / x for x in dist]
-    sample_prob = [x / sum(sample_prob) for x in sample_prob]  # normalize
-    ret = [sample_prob[x] / hist[x] for x in labels]
-
-    return ret
-
-
-def loop_dataset(g_list, classifier, sample_idxes,
+def loop_dataset(g_list, classifier, sample_indices,
                  optimizer=None, bsize=cmd_args.batch_size):
     total_score = []
-    total_iters = (len(sample_idxes) +
-                   (bsize - 1) * (optimizer is None)) // bsize
+    n_given = len(sample_indices)
+    if optimizer is None:
+        total_iters = n_given // bsize
+    else:
+        total_iters = (n_given + bsize - 1) // bsize
     pbar = tqdm(range(total_iters), unit='batch')
 
-    # graph_labels = [g.label for g in g_list]
-    # fair_prob = fair_sample_prob(sample_idxes, graph_labels)
-
-    n_samples = 0
+    n_tested = 0
     all_pred = []
     all_label = []
     for pos in pbar:
-        selected_idx = sample_idxes[pos * bsize: (pos + 1) * bsize]
-        # selected_idx = np.random.choice(sample_idxes, bsize, fair_prob)
-        batch_graph = [g_list[idx] for idx in selected_idx]
-        _, loss, acc, precision, recall, pred = classifier(batch_graph)
+        batch_indices = sample_indices[pos * bsize: (pos + 1) * bsize]
+        batch_graph = [g_list[idx] for idx in batch_indices]
 
-        if optimizer is not None:
+        if classifier.training:
+            for p in classifier.parameters():
+                p.requires_grad_(True)
+            classifier.mlp.lam.requires_grad_(False)
+            loss, acc, pred = classifier(batch_graph)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
+            if pos != 0 and pos % 5 == 0:
+                for p in classifier.parameters():
+                    p.requires_grad_(False)
+                classifier.mlp.lam.requires_grad_(True)
+                loss, acc, pred = classifier(batch_graph)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+        loss, acc, pred = classifier(batch_graph)
         all_pred.extend(pred.data.cpu().numpy().tolist())
         all_label.extend([g.label for g in batch_graph])
-        pos_precision = precision.data.cpu().numpy()[1]
-        pos_recall = recall.data.cpu().numpy()[1]
         loss = loss.data.cpu().numpy()
         pbar.set_description('loss: %0.5f acc: %0.5f' % (loss, acc))
-        total_score.append(np.array([loss, acc, pos_precision, pos_recall]))
-        n_samples += len(selected_idx)
+        total_score.append(np.array([loss, acc]))
+        n_tested += len(batch_indices)
 
-    if optimizer is None:
-        assert n_samples == len(sample_idxes)
+    if optimizer is None and n_tested != n_given:
+        log.info("%d of %d cased used in testing." % (n_tested, n_given))
 
+    classifier.mlp.print_result_dict()
     total_score = np.array(total_score)
     avg_score = np.mean(np.array(total_score), 0)
     return avg_score, all_pred, all_label
-
-
-def compute_pr_scores(pred, labels, prefix):
-    scores = {}
-    scores['precisions'] = precision_score(labels, pred, average=None)
-    scores['recalls'] = recall_score(labels, pred, average=None)
-    log.info('%s precision: %s recall: %s' %
-             (prefix, scores['precisions'], scores['recalls']))
-    df = pd.DataFrame.from_dict(scores)
-    df.to_csv('%s_%s_pr_scores.txt' % (cmd_args.data, prefix),
-              float_format='%.4f')
-
-
-def compute_confusion_matrix(pred, labels, prefix):
-    cm = confusion_matrix(labels, pred)
-    np.savetxt('%s_%s_confusion_matrix.txt' % (cmd_args.data, prefix), cm,
-               fmt='%4d', delimiter=' ')
-
-
-def store_embedding(classifier, graphs, prefix, sample_size=100):
-    if len(graphs) > sample_size:
-        sample_idx = np.random.randint(0, len(graphs), sample_size)
-        graphs = [graphs[i] for i in sample_idx]
-
-    emb = classifier.embedding(graphs)
-    emb = emb.data.cpu().numpy()
-    labels = [g.label for g in graphs]
-    np.savetxt('%s_%s_embedding.txt' % (cmd_args.data, prefix),
-               emb, fmt='%8.8f')
-    np.savetxt('%s_%s_embedding_label.txt' % (cmd_args.data, prefix),
-               labels, fmt='%d')
-
-
-def load_graphs_may_cache():
-    cached_filename = 'cached_graphs.pkl'
-    if cmd_args.use_cached_data:
-        log.info("Loading cached dataset from %s" % cached_filename)
-        cache_file = open(cached_filename, 'rb')
-        dataset = cp.load(cache_file)
-        cmd_args.num_class = dataset['num_class']
-        cmd_args.feat_dim = dataset['feat_dim']
-        cmd_args.attr_dim = dataset['attr_dim']
-        train_graphs = dataset['train_graphs']
-        test_graphs = dataset['test_graphs']
-        cache_file.close()
-    else:
-        train_graphs, test_graphs = load_data()
-        log.info("Dumping cached dataset from %s" % cached_filename)
-        cache_file = open(cached_filename, 'wb')
-        dataset = {}
-        dataset['num_class'] = cmd_args.num_class
-        dataset['feat_dim'] = cmd_args.feat_dim
-        dataset['attr_dim'] = cmd_args.attr_dim
-        dataset['train_graphs'] = train_graphs
-        dataset['test_graphs'] = test_graphs
-        cp.dump(dataset, cache_file)
-        cache_file.close()
-
-    return train_graphs, test_graphs
-
-
-def balanced_sampling(graphs):
-    graph_labels = np.array([g.label for g in graphs])
-    pos_indices = np.where(graph_labels == 1)[0]
-    neg_indices = np.where(graph_labels == 0)[0]
-    log.info('#pos = %s, #neg = %s' % (pos_indices.size, neg_indices.size))
-
-    upper_bound = min(pos_indices.size * 3, neg_indices.size)
-    sampled_pos = [graphs[i] for i in pos_indices]
-    sampled_neg = [graphs[i] for i in
-                   np.random.choice(neg_indices, upper_bound, replace=False)]
-    sampled = sampled_pos + sampled_neg
-
-    np.random.shuffle(sampled)
-    log.info("#Balance sampled graphs = %d" % len(sampled))
-    return sampled
 
 
 if __name__ == '__main__':
@@ -273,6 +192,8 @@ if __name__ == '__main__':
     test_graphs = balanced_sampling(test_graphs)
 
     log.info('#train: %d, #test: %d' % (len(train_graphs), len(test_graphs)))
+    data_ready_time = time.time() - start_time
+    log.info('Dataset ready takes %.2fs' % data_ready_time)
 
     if cmd_args.sortpooling_k <= 1:
         num_nodes_list = sorted([g.num_nodes for g in train_graphs +
@@ -285,48 +206,69 @@ if __name__ == '__main__':
     classifier = Classifier()
     if cmd_args.mode == 'gpu':
         classifier = classifier.cuda()
-        # classifier = nn.DataParallel(classifier)
 
     optimizer = optim.Adam(classifier.parameters(), lr=cmd_args.learning_rate)
 
-    train_idxes = list(range(len(train_graphs)))
-    best_loss = None
+    train_indices = list(range(len(train_graphs)))
+    test_indices = list(range(len(test_graphs)))
     train_loss_hist = []
     train_accu_hist = []
+    train_prec_hist = []
+    train_recall_hist = []
     test_loss_hist = []
     test_accu_hist = []
+    test_prec_hist = []
+    test_recall_hist = []
     for epoch in range(cmd_args.num_epochs):
-        random.shuffle(train_idxes)
+        random.shuffle(train_indices)
         classifier.train()
-        avg_score, train_pred, train_labels = \
-            loop_dataset(train_graphs, classifier,
-                         train_idxes, optimizer=optimizer)
-        print('\033[92mTraining epoch %d: l %.5f a %.5f p %.5f r %.5f\033[0m' %
-              (epoch, avg_score[0], avg_score[1], avg_score[2], avg_score[3]))
+        avg_score, train_pred, train_labels = loop_dataset(train_graphs,
+                                                           classifier,
+                                                           train_indices,
+                                                           optimizer=optimizer)
+        pr_score = compute_pr_scores(train_pred, train_labels, 'train')
+        print('\033[92mTrain epoch %d: l %.5f a %.5f p %.5f r %.5f\033[0m' %
+              (epoch, avg_score[0], avg_score[1],
+               pr_score['precisions'][1], pr_score['recalls'][1]))
         train_loss_hist.append(avg_score[0])
         train_accu_hist.append(avg_score[1])
+        train_prec_hist.append(pr_score['precisions'][1])
+        train_recall_hist.append(pr_score['recalls'][1])
 
         classifier.eval()
-        test_score, test_pred, test_labels = \
-            loop_dataset(test_graphs, classifier,
-                         list(range(len(test_graphs))))
+        test_score, test_pred, test_labels = loop_dataset(test_graphs,
+                                                          classifier,
+                                                          test_indices)
+        pr_score = compute_pr_scores(test_pred, test_labels, 'test')
         print('\033[93mTest epoch %d: l %.5f a %.5f p %.5f r %.5f\033[0m' %
-              (epoch, test_score[0], test_score[1], test_score[2], test_score[3]))
+              (epoch, test_score[0], test_score[1],
+               pr_score['precisions'][1], pr_score['recalls'][1]))
         test_loss_hist.append(test_score[0])
         test_accu_hist.append(test_score[1])
+        test_prec_hist.append(pr_score['precisions'][1])
+        test_recall_hist.append(pr_score['recalls'][1])
+
         if epoch + 1 == cmd_args.num_epochs:
-            compute_pr_scores(test_pred, test_labels, 'test')
-            compute_confusion_matrix(train_pred, train_labels, 'train')
-            compute_confusion_matrix(test_pred, test_labels, 'test')
+            df = pd.DataFrame.from_dict(pr_score)
+            df.to_csv('%s_test_pr_scores.txt' % cmd_args.data,
+                      float_format='%.4f')
+            store_confusion_matrix(train_pred, train_labels, 'train')
+            store_confusion_matrix(test_pred, test_labels, 'test')
             # store_embedding(classifier, train_graphs, 'train')
             # store_embedding(classifier, test_graphs, 'test')
 
     duration = time.time() - start_time
-    log.info('Single training running time = %.2fs' % duration)
+    log.info('Net training time = %.2f - %.2f = %.2fs' %
+             (duration, data_ready_time, duration - data_ready_time))
+    torch.save(classifier.state_dict(), '%s.model' % cmd_args.data)
     hist = {}
     hist['train_loss'] = train_loss_hist
     hist['train_accu'] = train_accu_hist
+    hist['train_prec'] = train_prec_hist
+    hist['train_recall'] = train_recall_hist
     hist['test_loss'] = test_loss_hist
     hist['test_accu'] = test_accu_hist
+    hist['test_prec'] = test_prec_hist
+    hist['test_recall'] = test_recall_hist
     df = pd.DataFrame.from_dict(hist)
     df.to_csv('%s_hist.txt' % cmd_args.data, float_format='%.6f')

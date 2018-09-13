@@ -2,15 +2,16 @@ from __future__ import print_function
 
 import argparse
 import random
+import torch
 import numpy as np
 import glog as log
 import networkx as nx
-
-# from tqdm import tqdm
+import cPickle as cp
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import precision_score
+from sklearn.metrics import recall_score
 # import os
-# import cPickle as cp
 # import _pickle as cp  # python3 compatability
-# import pdb
 
 cmd_opt = argparse.ArgumentParser(
     description='Argparser for graph_classification')
@@ -47,6 +48,8 @@ cmd_opt.add_argument('-dropout', type=str, default='False',
                      help='whether add dropout after dense layer')
 cmd_opt.add_argument('-use_cached_data', type=str, default='False',
                      help='whether to use previously cached dataset')
+cmd_opt.add_argument('-cache_file', type=str, default='cached_graphs.pkl',
+                     help='which cached data to use')
 
 cmd_args, _ = cmd_opt.parse_known_args()
 
@@ -56,7 +59,7 @@ if len(cmd_args.latent_dim) == 1:
 
 cmd_args.dropout = (cmd_args.dropout == "True")
 cmd_args.use_cached_data = (cmd_args.use_cached_data == "True")
-print(cmd_args)
+log.info(cmd_args)
 
 
 class S2VGraph(object):
@@ -165,3 +168,94 @@ def load_data():
     else:
         return g_list[: len(g_list) - cmd_args.test_number], \
             g_list[len(g_list) - cmd_args.test_number:]
+
+
+def compute_pr_scores(pred, labels, prefix):
+    scores = {}
+    scores['precisions'] = precision_score(labels, pred, average=None)
+    scores['recalls'] = recall_score(labels, pred, average=None)
+    return scores
+
+
+def store_confusion_matrix(pred, labels, prefix):
+    cm = confusion_matrix(labels, pred)
+    np.savetxt('%s_%s_confusion_matrix.txt' % (cmd_args.data, prefix), cm,
+               fmt='%4d', delimiter=' ')
+
+
+def store_embedding(classifier, graphs, prefix, sample_size=100):
+    if len(graphs) > sample_size:
+        sample_idx = np.random.randint(0, len(graphs), sample_size)
+        graphs = [graphs[i] for i in sample_idx]
+
+    emb = classifier.embedding(graphs)
+    emb = emb.data.cpu().numpy()
+    labels = [g.label for g in graphs]
+    np.savetxt('%s_%s_embedding.txt' % (cmd_args.data, prefix),
+               emb, fmt='%8.8f')
+    np.savetxt('%s_%s_embedding_label.txt' % (cmd_args.data, prefix),
+               labels, fmt='%d')
+
+
+def balanced_sampling(graphs, neg_ratio=3):
+    graph_labels = np.array([g.label for g in graphs])
+    pos_indices = np.where(graph_labels == 1)[0]
+    neg_indices = np.where(graph_labels == 0)[0]
+    log.info('In given dataset #pos = %s, #neg = %s' %
+             (pos_indices.size, neg_indices.size))
+    upper_bound = min(pos_indices.size * neg_ratio, neg_indices.size)
+    sampled_pos = [graphs[i] for i in pos_indices]
+    sampled_neg = [graphs[i] for i in
+                   np.random.choice(neg_indices, upper_bound, replace=False)]
+    sampled = sampled_pos + sampled_neg
+    np.random.shuffle(sampled)
+    log.info("#Balance sampled graphs = %d" % len(sampled))
+    return sampled
+
+
+def load_graphs_may_cache():
+    cached_filename = cmd_args.cache_file
+    if cmd_args.use_cached_data:
+        log.info("Loading cached dataset from %s" % cached_filename)
+        cache_file = open(cached_filename, 'rb')
+        dataset = cp.load(cache_file)
+        cmd_args.num_class = dataset['num_class']
+        cmd_args.feat_dim = dataset['feat_dim']
+        cmd_args.attr_dim = dataset['attr_dim']
+        train_graphs = dataset['train_graphs']
+        test_graphs = dataset['test_graphs']
+        cache_file.close()
+    else:
+        train_graphs, test_graphs = load_data()
+        log.info("Dumping cached dataset from %s" % cached_filename)
+        cache_file = open(cached_filename, 'wb')
+        dataset = {}
+        dataset['num_class'] = cmd_args.num_class
+        dataset['feat_dim'] = cmd_args.feat_dim
+        dataset['attr_dim'] = cmd_args.attr_dim
+        dataset['train_graphs'] = train_graphs
+        dataset['test_graphs'] = test_graphs
+        cp.dump(dataset, cache_file)
+        cache_file.close()
+
+    return train_graphs, test_graphs
+
+
+def fair_sample_prob(indices, labels):
+    """
+    sample_prob[ith elem] is proportional to 1 / prob[ith elem's label]
+    """
+    hist, _ = np.histogram(labels, bins=np.arange(max(labels) + 2),
+                           density=False)
+    dist, _ = np.histogram(labels, bins=np.arange(max(labels) + 2),
+                           density=True)
+    sample_prob = [1 / x for x in dist]
+    sample_prob = [x / sum(sample_prob) for x in sample_prob]  # normalize
+    ret = [sample_prob[x] / hist[x] for x in labels]
+
+    return ret
+
+
+def to_onehot(indices, num_classes):
+    onehot = torch.zeros(indices.size(0), num_classes, device=indices.device)
+    return onehot.scatter_(1, indices.unsqueeze(1), 1)

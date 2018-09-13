@@ -1,97 +1,60 @@
 #!/bin/bash
 
 # input arguments
-DATA="${1-DD}"  # MUTAG, ENZYMES, NCI1, NCI109, DD, PTC, PROTEINS, COLLAB, IMDBBINARY, IMDBMULTI
+DATA="${1-SMALLACFG}"
 fold=${2-1}  # which fold as testing data
 test_number=${3-0}  # if specified, use the last test_number graphs as test data
 
 # general settings
 gm=DGCNN  # model
 gpu_or_cpu=gpu
-GPU=1  # select the GPU number
+GPU=1  # select the GPU number, 0-3
 CONV_SIZE="32-32-32-1"
 sortpooling_k=0.6  # If k <= 1, then k is set to an integer so that k% of graphs have nodes less than this integer
 FP_LEN=0  # final dense layer's input dimension, decided by data
 n_hidden=128  # final dense layer's hidden size
-bsize=50  # batch size
+
+bsize=40  # batch size
+num_epochs=400
+learning_rate=0.0001
 dropout=True
+cache_file=cached_graphs.pkl
 
 # dataset-specific settings
 case ${DATA} in
-MUTAG)
-  num_epochs=300
-  learning_rate=0.0001
-  ;;
-ENZYMES)
-  num_epochs=500
-  learning_rate=0.0001
-  ;;
-NCI1)
-  num_epochs=200
-  learning_rate=0.0001
-  ;;
-NCI109)
-  num_epochs=200
-  learning_rate=0.0001
-  ;;
-DD)
-  num_epochs=200
-  learning_rate=0.00001
-  ;;
-PTC)
-  num_epochs=200
-  learning_rate=0.0001
-  ;;
-PROTEINS)
-  num_epochs=100
-  learning_rate=0.00001
-  ;;
-COLLAB)
-  num_epochs=300
-  learning_rate=0.0001
-  sortpooling_k=0.9
-  ;;
-IMDBBINARY)
-  num_epochs=300
-  learning_rate=0.0001
-  sortpooling_k=0.9
-  ;;
-IMDBMULTI)
-  num_epochs=500
-  learning_rate=0.0001
-  sortpooling_k=0.9
-  ;;
-SMALLACFG)
-  bsize=40
-  num_epochs=4
-  learning_rate=0.0001
-  use_cached_data=False
-  ;;
-ACFG_3C)
-  bsize=40
-  num_epochs=400
-  learning_rate=0.0001
-  ;;
-ACFG)
-  bsize=40
-  num_epochs=400
-  learning_rate=0.0001
-  ;;
 AcfgBenignVsAll)
-  bsize=40
-  num_epochs=400
-  learning_rate=0.0001
   use_cached_data=True
   ;;
 AcfgBagleVsAll)
-  bsize=40
-  num_epochs=400
-  learning_rate=0.0001
+  num_epochs=800
+  use_cached_data=True
+  ;;
+AcfgHupigonVsAll)
+  num_epochs=800
+  use_cached_data=True
+  ;;
+AcfgLmirVsAll)
+  num_epochs=100
+  use_cached_data=True
+  cache_file=cached_graphs_lmir.pkl
+  ;;
+AcfgVundoVsAll)
+  num_epochs=800
+  use_cached_data=True
+  ;;
+AcfgZlobVsAll)
+  bsize=80
+  num_epochs=690
+  use_cached_data=True
+  cache_file=cached_graphs_zlob.pkl
+  ;;
+SMALLACFG)
+  num_epochs=4
+  bsize=4
   use_cached_data=False
   ;;
 *)
-  num_epochs=500
-  learning_rate=0.00001
+  use_cached_data=False
   ;;
 esac
 
@@ -115,7 +78,8 @@ if [ ${fold} == 0 ]; then
         -gm ${gm} \
         -mode ${gpu_or_cpu} \
         -dropout ${dropout} \
-        -use_cached_data ${use_cached_data}
+        -use_cached_data ${use_cached_data} \
+        -cache_file ${cache_file}
   done
   stop=`date +%s`
   echo "End of cross-validation"
@@ -140,6 +104,7 @@ else
       -mode ${gpu_or_cpu} \
       -dropout ${dropout} \
       -use_cached_data ${use_cached_data} \
+      -cache_file ${cache_file} \
       -test_number ${test_number}
   echo "Train confusion matrix:"
   cat ${DATA}_train_confusion_matrix.txt
